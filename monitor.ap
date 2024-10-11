@@ -1,0 +1,25 @@
+
+ Create a monitoring script
+cat > /usr/local/bin/monitor_ap.sh <<EOL
+#!/bin/bash
+
+while true; do
+    i#f ! ip link show ${ETH_INTERFACE} | grep -q "UP"; then
+        echo "\$(date): Ethernet interface down. Bringing it up..."
+        ip link set ${ETH_INTERFACE} up
+        sleep 5
+    fi
+
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        echo "\$(date): Connection lost. Restarting networking..."
+        systemctl restart networking
+        systemctl restart hostapd
+        systemctl restart dnsmasq
+        iptables-restore < /etc/iptables.ipv4.nat
+    else
+        echo "\$(date): Connection is active."
+    fi
+    sleep 60
+done
+EOL
+
