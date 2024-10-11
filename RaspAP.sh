@@ -33,7 +33,7 @@ apt update
 
 # Install required packages
 echo "Installing required packages..."
-apt install -y hostapd dnsmasq iptables bridge-utils
+apt install -y hostapd dnsmasq iptables bridge-utils net-tools
 
 # Stop services
 systemctl stop hostapd
@@ -88,7 +88,9 @@ echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/routed-ap.conf
 sysctl -p /etc/sysctl.d/routed-ap.conf
 
 # Configure iptables
+iptables -t nat -F
 iptables -t nat -A POSTROUTING -o ${ETH_INTERFACE} -j MASQUERADE
+iptables -F
 iptables -A FORWARD -i ${ETH_INTERFACE} -o ${INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A FORWARD -i ${INTERFACE} -o ${ETH_INTERFACE} -j ACCEPT
 
@@ -104,10 +106,44 @@ EOL
 
 chmod +x /etc/rc.local
 
+# Create a monitoring script
+cat > /usr/local/bin/monitor_ap.sh <<EOL
+#!/bin/bash
+
+while true; do
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        echo "\$(date): Connection lost. Restarting networking..."
+        systemctl restart networking
+        systemctl restart hostapd
+        systemctl restart dnsmasq
+        iptables-restore < /etc/iptables.ipv4.nat
+    fi
+    sleep 60
+done
+EOL
+
+chmod +x /usr/local/bin/monitor_ap.sh
+
+# Create a systemd service for the monitoring script
+cat > /etc/systemd/system/ap_monitor.service <<EOL
+[Unit]
+Description=Monitor and maintain AP connection
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/monitor_ap.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
 # Enable and start services
+systemctl daemon-reload
 systemctl unmask hostapd
 systemctl enable hostapd
 systemctl enable dnsmasq
+systemctl enable ap_monitor
 
 # Restart networking
 systemctl restart networking
@@ -115,6 +151,8 @@ systemctl restart networking
 # Start services
 systemctl start hostapd
 systemctl start dnsmasq
+systemctl start ap_monitor
 
 echo "Wi-Fi Access Point setup complete. SSID: ${SSID}"
+echo "A monitoring service has been set up to maintain the connection."
 echo "Please reboot your Raspberry Pi for all changes to take effect."
