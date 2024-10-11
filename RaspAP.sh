@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Run this script with sudo
-
 if [[ $EUID -ne 0 ]]; then
    echo "This script must be run as root (use sudo)" 
    exit 1
@@ -11,14 +10,14 @@ fi
 read -p "Enter the SSID for your Wi-Fi network: " SSID
 read -s -p "Enter the password for your Wi-Fi network: " PASSWORD
 echo
-read -p "Enter the Wi-Fi interface name (usually wlan0): " INTERFACE
-read -p "Enter the Ethernet interface name (usually eth0 or end0): " ETH_INTERFACE
+read -p "Enter the Wi-Fi interface name (usually wlan0): " WIFI_INTERFACE
+read -p "Enter the Ethernet interface name (usually eth0): " ETH_INTERFACE
 
 # Confirm inputs
 echo "You entered:"
 echo "SSID: $SSID"
 echo "Password: [hidden]"
-echo "Wi-Fi Interface: $INTERFACE"
+echo "Wi-Fi Interface: $WIFI_INTERFACE"
 echo "Ethernet Interface: $ETH_INTERFACE"
 read -p "Is this correct? (y/n) " confirm
 
@@ -33,7 +32,7 @@ apt update
 
 # Install required packages
 echo "Installing required packages..."
-apt install -y hostapd dnsmasq iptables bridge-utils net-tools
+apt install -y hostapd dnsmasq iptables
 
 # Stop services
 systemctl stop hostapd
@@ -41,28 +40,26 @@ systemctl stop dnsmasq
 
 # Configure hostapd
 cat > /etc/hostapd/hostapd.conf <<EOL
-interface=${INTERFACE}
+interface=${WIFI_INTERFACE}
 driver=nl80211
 ssid=${SSID}
 hw_mode=g
-channel=1
-wmm_enabled=1
+channel=7
+wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=${PASSWORD}
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=CCMP
+wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 country_code=NZ
-ieee80211n=1
-ht_capab=[HT40][SHORT-GI-20][DSSS_CCK-40]
 EOL
 
 # Configure dnsmasq
 cat > /etc/dnsmasq.conf <<EOL
-interface=${INTERFACE}
+interface=${WIFI_INTERFACE}
 dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
 bind-interfaces
 server=8.8.8.8
@@ -77,8 +74,8 @@ iface lo inet loopback
 auto ${ETH_INTERFACE}
 iface ${ETH_INTERFACE} inet dhcp
 
-allow-hotplug ${INTERFACE}
-iface ${INTERFACE} inet static
+allow-hotplug ${WIFI_INTERFACE}
+iface ${WIFI_INTERFACE} inet static
     address 192.168.4.1
     netmask 255.255.255.0
 EOL
@@ -91,8 +88,8 @@ sysctl -p /etc/sysctl.d/routed-ap.conf
 iptables -t nat -F
 iptables -t nat -A POSTROUTING -o ${ETH_INTERFACE} -j MASQUERADE
 iptables -F
-iptables -A FORWARD -i ${ETH_INTERFACE} -o ${INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
-iptables -A FORWARD -i ${INTERFACE} -o ${ETH_INTERFACE} -j ACCEPT
+iptables -A FORWARD -i ${ETH_INTERFACE} -o ${WIFI_INTERFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i ${WIFI_INTERFACE} -o ${ETH_INTERFACE} -j ACCEPT
 
 # Save iptables rules
 iptables-save > /etc/iptables.ipv4.nat
@@ -106,37 +103,6 @@ EOL
 
 chmod +x /etc/rc.local
 
-# Create a monitoring script
-cat > /usr/local/bin/monitor_ap.sh <<EOL
-#!/bin/bash
-
-while true; do
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        echo "\$(date): Connection lost. Restarting networking..."
-        systemctl restart networking
-        systemctl restart hostapd
-        systemctl restart dnsmasq
-        iptables-restore < /etc/iptables.ipv4.nat
-    fi
-    sleep 60
-done
-EOL
-
-chmod +x /usr/local/bin/monitor_ap.sh
-
-# Create a systemd service for the monitoring script
-cat > /etc/systemd/system/ap_monitor.service <<EOL
-[Unit]
-Description=Monitor and maintain AP connection
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/monitor_ap.sh
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
 
 # Enable and start services
 systemctl daemon-reload
